@@ -1,0 +1,15 @@
+## Do case sensitive searches.
+set casesensitive
+
+## Don't wrap text.
+set nowrap
+
+## Use smooth scrolling.
+set smooth
+
+## Allow nano to be suspended.
+set suspend
+
+## Tabulation.
+#set tabstospaces
+set tabsize 4

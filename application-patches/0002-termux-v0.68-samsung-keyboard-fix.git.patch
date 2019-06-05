@@ -1,0 +1,34 @@
+From 1db80f0e7c806d75f0a8c7e2efb7e50998e27f3f Mon Sep 17 00:00:00 2001
+From: Leonid Plyushch <leonid.plyushch@gmail.com>
+Date: Mon, 25 Feb 2019 14:06:44 +0200
+Subject: [PATCH] TerminalView: fix for samsung keyboards
+
+This is a fix for the stock Samsung keyboard.
+Now keyboard type should be correct in all cases.
+---
+ terminal-view/src/main/java/com/termux/view/TerminalView.java | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/terminal-view/src/main/java/com/termux/view/TerminalView.java b/terminal-view/src/main/java/com/termux/view/TerminalView.java
+index 9ec3980..9e289e2 100644
+--- a/terminal-view/src/main/java/com/termux/view/TerminalView.java
++++ b/terminal-view/src/main/java/com/termux/view/TerminalView.java
+@@ -235,14 +235,12 @@ public final class TerminalView extends View {
+ 
+     @Override
+     public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
+-        // Using InputType.NULL is the most correct input type and avoids issues with other hacks.
+-        //
+         // Previous keyboard issues:
+         // https://github.com/termux/termux-packages/issues/25
+         // https://github.com/termux/termux-app/issues/87.
+         // https://github.com/termux/termux-app/issues/126.
+         // https://github.com/termux/termux-app/issues/137 (japanese chars and TYPE_NULL).
+-        outAttrs.inputType = InputType.TYPE_NULL;
++        outAttrs.inputType = InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;;
+ 
+         // Note that IME_ACTION_NONE cannot be used as that makes it impossible to input newlines using the on-screen
+         // keyboard on Android TV (see https://github.com/termux/termux-app/issues/221).
+-- 
+2.19.2
+

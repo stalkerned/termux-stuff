@@ -1,0 +1,1220 @@
+From 41552de2530ad7fc09c6c00f5cb4a6584d8aabf4 Mon Sep 17 00:00:00 2001
+From: Leonid Plyushch <leonid.plyushch@gmail.com>
+Date: Thu, 18 Apr 2019 20:31:30 +0300
+Subject: [PATCH] merge sources of Termux:Widget
+
+---
+ app/src/main/AndroidManifest.xml              |  31 +++-
+ .../widget/TermuxCreateShortcutActivity.java  |  98 ++++++++++++
+ .../widget/TermuxLaunchShortcutActivity.java  |  69 ++++++++
+ .../termux/widget/TermuxWidgetProvider.java   | 132 ++++++++++++++++
+ .../termux/widget/TermuxWidgetService.java    | 149 ++++++++++++++++++
+ app/src/main/res/drawable/ripple_mask.xml     |  11 ++
+ app/src/main/res/drawable/widgetpreview.png   | Bin 0 -> 31564 bytes
+ .../main/res/layout/shortcuts_listview.xml    |   6 +
+ app/src/main/res/layout/widget_item.xml       |  20 +++
+ app/src/main/res/layout/widget_layout.xml     |  65 ++++++++
+ app/src/main/res/values/strings.xml           |   8 +
+ .../main/res/xml/termux_appwidget_info.xml    |  14 ++
+ 12 files changed, 602 insertions(+), 1 deletion(-)
+ create mode 100644 app/src/main/java/com/termux/widget/TermuxCreateShortcutActivity.java
+ create mode 100644 app/src/main/java/com/termux/widget/TermuxLaunchShortcutActivity.java
+ create mode 100644 app/src/main/java/com/termux/widget/TermuxWidgetProvider.java
+ create mode 100644 app/src/main/java/com/termux/widget/TermuxWidgetService.java
+ create mode 100644 app/src/main/res/drawable/ripple_mask.xml
+ create mode 100644 app/src/main/res/drawable/widgetpreview.png
+ create mode 100644 app/src/main/res/layout/shortcuts_listview.xml
+ create mode 100644 app/src/main/res/layout/widget_item.xml
+ create mode 100644 app/src/main/res/layout/widget_layout.xml
+ create mode 100644 app/src/main/res/xml/termux_appwidget_info.xml
+
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index baa226c..34e61a4 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -139,6 +139,35 @@
+                   android:name="com.termux.app.TermuxOpenReceiver$ContentProvider" />
+ 
+         <meta-data android:name="com.sec.android.support.multiwindow" android:value="true" />
+-    </application>
+ 
++        <receiver
++            android:name="com.termux.widget.TermuxWidgetProvider"
++            android:label="@string/shortcut_widget_name" >
++            <intent-filter>
++                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
++            </intent-filter>
++            <meta-data
++                android:name="android.appwidget.provider"
++                android:resource="@xml/termux_appwidget_info" />
++        </receiver>
++
++        <activity
++            android:name="com.termux.widget.TermuxCreateShortcutActivity"
++            android:label="@string/single_shortcut_name"
++            android:theme="@android:style/Theme.Material.Light.DarkActionBar">
++            <intent-filter>
++                <action android:name="android.intent.action.CREATE_SHORTCUT" />
++            </intent-filter>
++        </activity>
++        <activity
++            android:name="com.termux.widget.TermuxLaunchShortcutActivity"
++            android:noHistory="true"
++            android:theme="@android:style/Theme.NoDisplay"
++            android:exported="true"/>
++
++        <service
++            android:name="com.termux.widget.TermuxWidgetService"
++            android:exported="false"
++            android:permission="android.permission.BIND_REMOTEVIEWS" />
++    </application>
+ </manifest>
+diff --git a/app/src/main/java/com/termux/widget/TermuxCreateShortcutActivity.java b/app/src/main/java/com/termux/widget/TermuxCreateShortcutActivity.java
+new file mode 100644
+index 0000000..b8ae41b
+--- /dev/null
++++ b/app/src/main/java/com/termux/widget/TermuxCreateShortcutActivity.java
+@@ -0,0 +1,98 @@
++package com.termux.widget;
++
++import android.app.Activity;
++import android.app.AlertDialog;
++import android.content.Context;
++import android.content.Intent;
++import android.net.Uri;
++import android.os.Bundle;
++import android.view.MenuItem;
++import android.widget.ArrayAdapter;
++import android.widget.ListView;
++
++import com.termux.R;
++
++import java.io.File;
++import java.util.Arrays;
++
++public class TermuxCreateShortcutActivity extends Activity {
++
++    private ListView mListView;
++    private File mCurrentDirectory;
++    private File[] mCurrentFiles;
++
++    @Override
++    protected void onCreate(Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        setContentView(R.layout.shortcuts_listview);
++        mListView = findViewById(R.id.list);
++    }
++
++    @Override
++    protected void onResume() {
++        super.onResume();
++
++        updateListview(TermuxWidgetService.SHORTCUTS_DIR);
++
++        mListView.setOnItemClickListener((parent, view, position, id) -> {
++            final Context context = TermuxCreateShortcutActivity.this;
++            File clickedFile = mCurrentFiles[position];
++            if (clickedFile.isDirectory()) {
++                updateListview(clickedFile);
++                return;
++            }
++
++            Intent.ShortcutIconResource icon = Intent.ShortcutIconResource.fromContext(context, R.drawable.ic_launcher);
++
++            Uri scriptUri = new Uri.Builder().scheme("com.termux.file").path(clickedFile.getAbsolutePath()).build();
++            Intent executeIntent = new Intent(context, TermuxLaunchShortcutActivity.class);
++            executeIntent.setData(scriptUri);
++            executeIntent.putExtra(TermuxLaunchShortcutActivity.TOKEN_NAME, TermuxLaunchShortcutActivity.getGeneratedToken(context));
++
++            Intent intent = new Intent();
++            intent.putExtra(Intent.EXTRA_SHORTCUT_INTENT, executeIntent);
++            intent.putExtra(Intent.EXTRA_SHORTCUT_NAME, clickedFile.getName());
++            intent.putExtra(Intent.EXTRA_SHORTCUT_ICON_RESOURCE, icon);
++
++            setResult(RESULT_OK, intent);
++            finish();
++        });
++    }
++
++    private void updateListview(File directory) {
++        mCurrentDirectory = directory;
++        mCurrentFiles = directory.listFiles(pathname -> !pathname.getName().startsWith("."));
++        if (mCurrentFiles == null) mCurrentFiles = new File[0];
++
++        Arrays.sort(mCurrentFiles, (f1, f2) -> f1.getName().compareTo(f2.getName()));
++
++        final boolean isTopDir = directory.equals(TermuxWidgetService.SHORTCUTS_DIR);
++        getActionBar().setDisplayHomeAsUpEnabled(!isTopDir);
++
++        if (isTopDir && mCurrentFiles.length == 0) {
++            // Create if necessary so user can more easily add.
++            TermuxWidgetService.SHORTCUTS_DIR.mkdirs();
++            new AlertDialog.Builder(this)
++                    .setMessage(R.string.no_shortcut_scripts)
++                    .setOnDismissListener(dialog -> finish()).show();
++            return;
++        }
++
++        final String[] values = new String[mCurrentFiles.length];
++        for (int i = 0; i < values.length; i++)
++            values[i] = mCurrentFiles[i].getName() +
++                    (mCurrentFiles[i].isDirectory() ? "/" : "");
++
++        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, android.R.id.text1, values);
++        mListView.setAdapter(adapter);
++    }
++
++    @Override
++    public boolean onOptionsItemSelected(MenuItem item) {
++        if (item.getItemId() == android.R.id.home) {
++            updateListview(mCurrentDirectory.getParentFile());
++            return true;
++        }
++        return super.onOptionsItemSelected(item);
++    }
++}
+diff --git a/app/src/main/java/com/termux/widget/TermuxLaunchShortcutActivity.java b/app/src/main/java/com/termux/widget/TermuxLaunchShortcutActivity.java
+new file mode 100644
+index 0000000..e935c17
+--- /dev/null
++++ b/app/src/main/java/com/termux/widget/TermuxLaunchShortcutActivity.java
+@@ -0,0 +1,69 @@
++package com.termux.widget;
++
++import android.app.Activity;
++import android.content.Context;
++import android.content.Intent;
++import android.content.SharedPreferences;
++import android.net.Uri;
++import android.util.Log;
++import android.view.Gravity;
++import android.widget.Toast;
++
++import com.termux.R;
++
++import java.io.File;
++import java.util.UUID;
++
++/**
++ * An activity to launch a shortcut. We want to a launch a service directly, but a shortcut
++ * cannot be used to launch a service, only activities, so have to go through this activity.
++ */
++public class TermuxLaunchShortcutActivity extends Activity {
++
++	static final String TOKEN_NAME = "com.termux.shortcut.token";
++
++	public static String getGeneratedToken(Context context) {
++		SharedPreferences prefs = context.getSharedPreferences("token", Context.MODE_PRIVATE);
++		String token = prefs.getString("token", null);
++		if (token == null) {
++			token = UUID.randomUUID().toString();
++			prefs.edit().putString("token", token).apply();
++		}
++		return token;
++	}
++
++	@Override
++	protected void onResume() {
++		super.onResume();
++
++		Intent intent = getIntent();
++		String token = intent.getStringExtra(TOKEN_NAME);
++		if (token == null || !token.equals(getGeneratedToken(this))) {
++			Log.w("termux", "Strange token: " + token);
++			Toast.makeText(this, R.string.bad_token_message, Toast.LENGTH_LONG).show();
++			finish();
++			return;
++		}
++
++		File clickedFile = new File(intent.getData().getPath());
++		TermuxWidgetProvider.ensureFileReadableAndExecutable(clickedFile);
++
++		// Do not use the intent data passed in, since that may be an old one with a file:// uri
++		// which is not allowed starting with Android 7.
++		Uri scriptUri = new Uri.Builder().scheme("com.termux.file").path(clickedFile.getAbsolutePath()).build();
++
++		Intent executeIntent = new Intent(TermuxWidgetProvider.ACTION_EXECUTE, scriptUri);
++		executeIntent.setClassName("com.termux", TermuxWidgetProvider.TERMUX_SERVICE);
++		if (clickedFile.getParentFile().getName().equals("tasks")) {
++			executeIntent.putExtra("com.termux.execute.background", true);
++			// Show feedback for executed background task.
++			String message = "Task executed: " + clickedFile.getName();
++			Toast toast = Toast.makeText(this, message, Toast.LENGTH_SHORT);
++			toast.setGravity(Gravity.CENTER, 0, 0);
++			toast.show();
++		}
++
++		TermuxWidgetProvider.startTermuxService(this, executeIntent);
++		finish();
++	}
++}
+diff --git a/app/src/main/java/com/termux/widget/TermuxWidgetProvider.java b/app/src/main/java/com/termux/widget/TermuxWidgetProvider.java
+new file mode 100644
+index 0000000..13e21a2
+--- /dev/null
++++ b/app/src/main/java/com/termux/widget/TermuxWidgetProvider.java
+@@ -0,0 +1,132 @@
++package com.termux.widget;
++
++import android.app.PendingIntent;
++import android.appwidget.AppWidgetManager;
++import android.appwidget.AppWidgetProvider;
++import android.content.Context;
++import android.content.Intent;
++import android.net.Uri;
++import android.os.Build;
++import android.view.Gravity;
++import android.widget.RemoteViews;
++import android.widget.Toast;
++
++import com.termux.R;
++
++import java.io.File;
++
++/**
++ * Widget providing a list to launch scripts in $HOME/.termux/shortcuts/.
++ * <p>
++ * See https://developer.android.com/guide/topics/appwidgets/index.html
++ */
++public final class TermuxWidgetProvider extends AppWidgetProvider {
++
++    private static final String LIST_ITEM_CLICKED_ACTION = "com.termux.widgets.LIST_ITEM_CLICKED_ACTION";
++    private static final String REFRESH_WIDGET_ACTION = "com.termux.widgets.REFRESH_WIDGET_ACTION";
++    public static final String EXTRA_CLICKED_FILE = "com.termux.widgets.EXTRA_CLICKED_FILE";
++
++    public static final String TERMUX_SERVICE = "com.termux.app.TermuxService";
++    public static final String ACTION_EXECUTE = "com.termux.service_execute";
++
++
++    /**
++     * "This is called to update the App Widget at intervals defined by the updatePeriodMillis attribute in the
++     * AppWidgetProviderInfo (see Adding the AppWidgetProviderInfo Metadata above). This method is also called when the
++     * user adds the App Widget, so it should perform the essential setup, such as define event handlers for Views and
++     * start a temporary Service, if necessary. However, if you have declared a configuration Activity, this method is
++     * not called when the user adds the App Widget, but is called for the subsequent updates. It is the responsibility
++     * of the configuration Activity to perform the first update when configuration is done. (See Creating an App Widget
++     * Configuration Activity below.)"
++     */
++    @Override
++    public void onUpdate(Context context, AppWidgetManager appWidgetManager, int[] appWidgetIds) {
++        for (int appWidgetId : appWidgetIds) {
++            RemoteViews rv = new RemoteViews(context.getPackageName(), R.layout.widget_layout);
++
++            // The empty view is displayed when the collection has no items. It should be a sibling
++            // of the collection view:
++            rv.setEmptyView(R.id.widget_list, R.id.empty_view);
++
++            // Setup intent which points to the TermuxWidgetService which will provide the views for this collection.
++            Intent intent = new Intent(context, TermuxWidgetService.class);
++            intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId);
++            // When intents are compared, the extras are ignored, so we need to embed the extras
++            // into the data so that the extras will not be ignored.
++            intent.setData(Uri.parse(intent.toUri(Intent.URI_INTENT_SCHEME)));
++            rv.setRemoteAdapter(R.id.widget_list, intent);
++
++            // Setup refresh button:
++            Intent refreshIntent = new Intent(context, TermuxWidgetProvider.class);
++            refreshIntent.setAction(TermuxWidgetProvider.REFRESH_WIDGET_ACTION);
++            refreshIntent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId);
++            refreshIntent.setData(Uri.parse(refreshIntent.toUri(Intent.URI_INTENT_SCHEME)));
++            PendingIntent refreshPendingIntent = PendingIntent.getBroadcast(context, 0, refreshIntent, PendingIntent.FLAG_UPDATE_CURRENT);
++            rv.setOnClickPendingIntent(R.id.refresh_button, refreshPendingIntent);
++
++            // Here we setup the a pending intent template. Individuals items of a collection
++            // cannot setup their own pending intents, instead, the collection as a whole can
++            // setup a pending intent template, and the individual items can set a fillInIntent
++            // to create unique before on an item to item basis.
++            Intent toastIntent = new Intent(context, TermuxWidgetProvider.class);
++            toastIntent.setAction(TermuxWidgetProvider.LIST_ITEM_CLICKED_ACTION);
++            toastIntent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId);
++            intent.setData(Uri.parse(intent.toUri(Intent.URI_INTENT_SCHEME)));
++            PendingIntent toastPendingIntent = PendingIntent.getBroadcast(context, 0, toastIntent, PendingIntent.FLAG_UPDATE_CURRENT);
++            rv.setPendingIntentTemplate(R.id.widget_list, toastPendingIntent);
++
++            appWidgetManager.updateAppWidget(appWidgetId, rv);
++        }
++    }
++
++    @Override
++    public void onReceive(Context context, Intent intent) {
++        super.onReceive(context, intent);
++
++        switch (intent.getAction()) {
++            case LIST_ITEM_CLICKED_ACTION:
++                String clickedFilePath = intent.getStringExtra(EXTRA_CLICKED_FILE);
++                File clickedFile = new File(clickedFilePath);
++                if (clickedFile.isDirectory()) return;
++                ensureFileReadableAndExecutable(clickedFile);
++                Uri scriptUri = new Uri.Builder().scheme("com.termux.file").path(clickedFilePath).build();
++
++                // Note: Must match TermuxService#ACTION_EXECUTE constant:
++                Intent executeIntent = new Intent(ACTION_EXECUTE, scriptUri);
++                executeIntent.setClassName("com.termux", TERMUX_SERVICE);
++                if (clickedFile.getParentFile().getName().equals("tasks")) {
++                    executeIntent.putExtra("com.termux.execute.background", true);
++                    // Show feedback for executed background task.
++                    String message = "Task executed: " + clickedFile.getName();
++                    Toast toast = Toast.makeText(context, message, Toast.LENGTH_SHORT);
++                    toast.setGravity(Gravity.CENTER, 0, 0);
++                    toast.show();
++                }
++                startTermuxService(context, executeIntent);
++                break;
++            case REFRESH_WIDGET_ACTION:
++                int appWidgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID);
++                AppWidgetManager.getInstance(context).notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_list);
++
++                Toast toast = Toast.makeText(context, R.string.scripts_reloaded, Toast.LENGTH_SHORT);
++                toast.setGravity(Gravity.CENTER, 0, 0);
++                toast.show();
++                break;
++        }
++    }
++
++    static void startTermuxService(Context context, Intent executeIntent) {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
++            // https://developer.android.com/about/versions/oreo/background.html
++            context.startForegroundService(executeIntent);
++        } else {
++            context.startService(executeIntent);
++        }
++    }
++
++    /** Ensure readable and executable file if user forgot to do so. */
++    static void ensureFileReadableAndExecutable(File file) {
++        if (!file.canRead()) file.setReadable(true);
++        if (!file.canExecute()) file.setExecutable(true);
++    }
++}
+diff --git a/app/src/main/java/com/termux/widget/TermuxWidgetService.java b/app/src/main/java/com/termux/widget/TermuxWidgetService.java
+new file mode 100644
+index 0000000..3048db0
+--- /dev/null
++++ b/app/src/main/java/com/termux/widget/TermuxWidgetService.java
+@@ -0,0 +1,149 @@
++package com.termux.widget;
++
++import android.annotation.SuppressLint;
++import android.content.Context;
++import android.content.Intent;
++import android.widget.RemoteViews;
++import android.widget.RemoteViewsService;
++
++import com.termux.R;
++
++import java.io.File;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.List;
++
++public final class TermuxWidgetService extends RemoteViewsService {
++
++    @SuppressLint("SdCardPath")
++    public static final File SHORTCUTS_DIR = new File("/data/data/com.termux/files/home/.shortcuts");
++
++    public static final class TermuxWidgetItem {
++
++        /** Label to display in the list. */
++        public final String mLabel;
++        /** The file which this item represents, sent with the {@link TermuxWidgetProvider#EXTRA_CLICKED_FILE} extra. */
++        public final String mFile;
++
++        public TermuxWidgetItem(File file, int depth) {
++            this.mLabel = (depth > 0 ? (file.getParentFile().getName() + "/") : "")
++                    + file.getName().replace('-', ' ');
++            this.mFile = file.getAbsolutePath();
++        }
++
++    }
++
++    @Override
++    public RemoteViewsFactory onGetViewFactory(Intent intent) {
++        return new ListRemoteViewsFactory(getApplicationContext());
++    }
++
++    public static class ListRemoteViewsFactory implements RemoteViewsService.RemoteViewsFactory {
++        private final List<TermuxWidgetItem> mWidgetItems = new ArrayList<>();
++        private final Context mContext;
++
++        public ListRemoteViewsFactory(Context context) {
++            mContext = context;
++        }
++
++        @Override
++        public void onCreate() {
++            // In onCreate() you setup any connections / cursors to your data source. Heavy lifting,
++            // for example downloading or creating content etc, should be deferred to onDataSetChanged()
++            // or getViewAt(). Taking more than 20 seconds in this call will result in an ANR.
++        }
++
++        @Override
++        public void onDestroy() {
++            mWidgetItems.clear();
++        }
++
++        @Override
++        public int getCount() {
++            return mWidgetItems.size();
++        }
++
++        @Override
++        public RemoteViews getViewAt(int position) {
++            // Position will always range from 0 to getCount() - 1.
++            TermuxWidgetItem widgetItem = mWidgetItems.get(position);
++
++            // Construct remote views item based on the item xml file and set text based on position.
++            RemoteViews rv = new RemoteViews(mContext.getPackageName(), R.layout.widget_item);
++            rv.setTextViewText(R.id.widget_item, widgetItem.mLabel);
++
++            // Next, we set a fill-intent which will be used to fill-in the pending intent template
++            // which is set on the collection view in TermuxAppWidgetProvider.
++            Intent fillInIntent = new Intent().putExtra(TermuxWidgetProvider.EXTRA_CLICKED_FILE, widgetItem.mFile);
++            rv.setOnClickFillInIntent(R.id.widget_item_layout, fillInIntent);
++
++            // You can do heaving lifting in here, synchronously. For example, if you need to
++            // process an image, fetch something from the network, etc., it is ok to do it here,
++            // synchronously. A loading view will show up in lieu of the actual contents in the
++            // interim.
++
++            return rv;
++        }
++
++        @Override
++        public RemoteViews getLoadingView() {
++            // You can create a custom loading view (for instance when getViewAt() is slow.) If you
++            // return null here, you will get the default loading view.
++            return null;
++        }
++
++        @Override
++        public int getViewTypeCount() {
++            return 1;
++        }
++
++        @Override
++        public long getItemId(int position) {
++            return position;
++        }
++
++        @Override
++        public boolean hasStableIds() {
++            return true;
++        }
++
++        @SuppressLint("SdCardPath")
++        @Override
++        public void onDataSetChanged() {
++            // This is triggered when you call AppWidgetManager notifyAppWidgetViewDataChanged
++            // on the collection view corresponding to this factory. You can do heaving lifting in
++            // here, synchronously. For example, if you need to process an image, fetch something
++            // from the network, etc., it is ok to do it here, synchronously. The widget will remain
++            // in its current state while work is being done here, so you don't need to worry about
++            // locking up the widget.
++            mWidgetItems.clear();
++            // Create directory if necessary so user more easily finds where to put shortcuts:
++            SHORTCUTS_DIR.mkdirs();
++
++            addFile(SHORTCUTS_DIR, mWidgetItems, 0);
++        }
++    }
++
++    private static void addFile(File dir, List<TermuxWidgetItem> widgetItems, int depth) {
++        if (depth > 5) return;
++
++        File[] files = dir.listFiles(pathname -> !pathname.getName().startsWith("."));
++
++        if (files == null) return;
++        Arrays.sort(files, (lhs, rhs) -> {
++            if (lhs.isDirectory() != rhs.isDirectory()) {
++                return lhs.isDirectory() ? 1 : -1;
++            }
++            return lhs.getName().compareToIgnoreCase(rhs.getName());
++        });
++
++        for (File file : files) {
++            if (file.isDirectory()) {
++                addFile(file, widgetItems, depth + 1);
++            } else {
++                widgetItems.add(new TermuxWidgetItem(file, depth));
++            }
++        }
++
++    }
++}
+diff --git a/app/src/main/res/drawable/ripple_mask.xml b/app/src/main/res/drawable/ripple_mask.xml
+new file mode 100644
+index 0000000..fe34991
+--- /dev/null
++++ b/app/src/main/res/drawable/ripple_mask.xml
+@@ -0,0 +1,11 @@
++<?xml version="1.0" encoding="utf-8"?>
++<ripple xmlns:android="http://schemas.android.com/apk/res/android"
++    android:color="@android:color/darker_gray" >
++
++    <item android:id="@android:id/mask">
++        <shape android:shape="rectangle" >
++            <solid android:color="#FF000000" />
++        </shape>
++    </item>
++
++</ripple>
+\ No newline at end of file
+diff --git a/app/src/main/res/drawable/widgetpreview.png b/app/src/main/res/drawable/widgetpreview.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..8052608a898d86e6aea5ef2a6905f278fba04ce2
+GIT binary patch
+literal 31564
+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
+HZ#no6-;5ys
+
+literal 0
+HcmV?d00001
+
+diff --git a/app/src/main/res/layout/shortcuts_listview.xml b/app/src/main/res/layout/shortcuts_listview.xml
+new file mode 100644
+index 0000000..fe31f37
+--- /dev/null
++++ b/app/src/main/res/layout/shortcuts_listview.xml
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<ListView xmlns:android="http://schemas.android.com/apk/res/android"
++    android:id="@+id/list"
++    android:layout_height="wrap_content"
++    android:layout_width="match_parent">
++</ListView>
+diff --git a/app/src/main/res/layout/widget_item.xml b/app/src/main/res/layout/widget_item.xml
+new file mode 100644
+index 0000000..0df4d30
+--- /dev/null
++++ b/app/src/main/res/layout/widget_item.xml
+@@ -0,0 +1,20 @@
++<?xml version="1.0" encoding="utf-8"?>
++<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    android:id="@+id/widget_item_layout"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:background="@drawable/ripple_mask"
++    android:padding="10dp" >
++
++    <!--
++         See http://stackoverflow.com/questions/16278159/why-linearlayouts-margin-is-being-ignored-if-used-as-listview-row-view
++		 for the extra layout wrapper.
++    -->
++
++    <TextView
++        android:id="@+id/widget_item"
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:textColor="@android:color/primary_text_light" />
++
++</FrameLayout>
+\ No newline at end of file
+diff --git a/app/src/main/res/layout/widget_layout.xml b/app/src/main/res/layout/widget_layout.xml
+new file mode 100644
+index 0000000..00df7d1
+--- /dev/null
++++ b/app/src/main/res/layout/widget_layout.xml
+@@ -0,0 +1,65 @@
++<?xml version="1.0" encoding="utf-8"?>
++<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="match_parent"
++    android:padding="0dp" >
++
++    <RelativeLayout
++        android:layout_width="match_parent"
++        android:layout_height="match_parent"
++        android:padding="0dp"
++        android:paddingTop="6dp" >
++
++        <LinearLayout
++            android:id="@+id/top_row"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:background="#FF000000"
++            android:orientation="horizontal"
++            android:padding="6dp" >
++
++            <TextView
++                android:layout_width="0dp"
++                android:layout_height="wrap_content"
++                android:layout_gravity="center_vertical"
++                android:layout_weight="2.0"
++                android:text="@string/termux"
++                android:textColor="@android:color/primary_text_dark"
++                android:textSize="18sp" />
++        </LinearLayout>
++
++        <ListView
++            android:id="@+id/widget_list"
++            android:layout_width="match_parent"
++            android:layout_height="match_parent"
++            android:layout_below="@id/top_row"
++            android:background="@android:color/background_light"
++            android:divider="@android:color/darker_gray"
++            android:dividerHeight="1px" >
++        </ListView>
++
++        <!-- Shown for empty collection due to rv.setEmptyView(R.id.widget_list, R.id.empty_view) being called: -->
++
++        <TextView
++            android:id="@+id/empty_view"
++            android:layout_width="match_parent"
++            android:layout_height="match_parent"
++            android:layout_below="@id/top_row"
++            android:background="@android:color/white"
++            android:padding="6dp"
++            android:text="@string/no_shortcut_scripts"
++            android:textColor="@android:color/black" />
++    </RelativeLayout>
++
++    <ImageButton
++        android:id="@+id/refresh_button"
++        style="?android:attr/borderlessButtonStyle"
++        android:layout_width="34dp"
++        android:layout_height="34dp"
++        android:layout_alignParentEnd="true"
++        android:layout_alignParentTop="true"
++        android:contentDescription="@string/refresh"
++        android:tint="#99000000"
++        android:src="@android:drawable/stat_notify_sync" />
++
++</RelativeLayout>
+\ No newline at end of file
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index cf7b60c..fe7bdeb 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -53,4 +53,12 @@
+     <string name="color_prompt">Choose color</string>
+     <string name="font_prompt">Choose font</string>
+     <string name="writing_failed">Failed to install file:\n\n</string>
++
++    <string name="shortcut_widget_name">All shortcuts</string>
++    <string name="single_shortcut_name">Single shortcut</string>
++    <string name="no_shortcut_scripts">No files in\n$HOME/.shortcuts/</string>
++    <string name="refresh">Refresh</string>
++    <string name="termux">Termux</string>
++    <string name="scripts_reloaded">Termux shortcuts reloaded</string>
++    <string name="bad_token_message">This shortcut has become invalid - remove and add again.</string>
+ </resources>
+diff --git a/app/src/main/res/xml/termux_appwidget_info.xml b/app/src/main/res/xml/termux_appwidget_info.xml
+new file mode 100644
+index 0000000..13941aa
+--- /dev/null
++++ b/app/src/main/res/xml/termux_appwidget_info.xml
+@@ -0,0 +1,14 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++	See
++	http://developer.android.com/guide/practices/ui_guidelines/widget_design.html#anatomy_determining_size
++	for how to determine size: 
++-->
++<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
++    android:initialLayout="@layout/widget_layout"
++    android:minHeight="110dp"
++    android:minWidth="110dp"
++    android:previewImage="@drawable/widgetpreview"
++    android:resizeMode="horizontal|vertical"
++    android:updatePeriodMillis="0"
++    android:widgetCategory="home_screen|keyguard" />
+-- 
+2.19.2
+

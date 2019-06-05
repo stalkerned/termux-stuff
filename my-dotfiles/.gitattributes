@@ -1,0 +1,9 @@
+# Restic.
+/home/restic_env filter=git-crypt diff=git-crypt
+
+# SSH.
+/home/ssh/authorized_keys filter=git-crypt diff=git-crypt
+/home/ssh/config filter=git-crypt diff=git-crypt
+
+# Tor.
+/prefix/etc/tor/torrc filter=git-crypt diff=git-crypt
